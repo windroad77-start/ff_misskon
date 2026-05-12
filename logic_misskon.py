@@ -79,11 +79,22 @@ class LogicMissKon:
 
         # adapter
         from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+        retry_strategy = Retry(
+            total=5,
+            connect=5,
+            read=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            raise_on_status=False,
+        )
 
         adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=10,
-            max_retries=3
+            pool_connections=20,
+            pool_maxsize=20,
+            max_retries=retry_strategy
         )
 
         session.mount("http://", adapter)
@@ -132,6 +143,26 @@ class LogicMissKon:
 
         return LogicMissKon.parse_html_list(base_url, page, search, category)
 
+
+    @staticmethod
+    def _safe_request(session, method, url, **kwargs):
+        """
+        SSL EOF 오류 대응용 요청 래퍼.
+        1차: SSL verify=True
+        2차: verify=False fallback
+        """
+        try:
+            return session.request(method, url, **kwargs)
+        except requests.exceptions.SSLError:
+            try:
+                from .setup import P
+                P.logger.warning(f"[MissKon] SSL Error fallback verify=False: {url}")
+            except:
+                pass
+
+            kwargs["verify"] = False
+            return session.request(method, url, **kwargs)
+
     @staticmethod
     def _parse_api_list(base_url, page=1, search=""):
         session = LogicMissKon.get_session()
@@ -139,7 +170,9 @@ class LogicMissKon:
         if search:
             params["search"] = search
 
-        res = session.get(
+        res = LogicMissKon._safe_request(
+            session,
+            "GET",
             f"{base_url}{LogicMissKon.API_PATH}",
             params=params,
             headers=LogicMissKon.HEADERS,
@@ -186,7 +219,9 @@ class LogicMissKon:
         res = None
         for url in urls:
             try:
-                candidate = session.get(
+                candidate = LogicMissKon._safe_request(
+                    session,
+                    "GET",
                     url,
                     headers=LogicMissKon.HEADERS,
                     timeout=(15, 60),
@@ -398,7 +433,7 @@ class LogicMissKon:
     @staticmethod
     def _fetch_soup(session, url):
         try:
-            res = session.get(url, headers=LogicMissKon.HEADERS, timeout=(10, 30))
+            res = LogicMissKon._safe_request(session, "GET", url, headers=LogicMissKon.HEADERS, timeout=(10, 30))
             if res.status_code == 200:
                 return BeautifulSoup(res.text, "html.parser")
             else:
